@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #080C14;
+    color: #E2E8F0;
+    font-family: 'Inter', sans-serif;
+  }
+}
+
+/* Gritty Mission-Control Grid & CRT Scanline Background Texture */
+.instrument-grid {
+  background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.radar-glow {
+  box-shadow: 0 0 15px rgba(13, 148, 136, 0.15);
+}
+
+.hard-fault-pulse {
+  animation: pulse-red 1.5s infinite;
+}
+
+@keyframes pulse-red {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+    border-color: rgba(239, 68, 68, 0.9);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+    border-color: rgba(239, 68, 68, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    border-color: rgba(239, 68, 68, 0.9);
+  }
+}
+
+.soft-anomaly-pulse {
+  animation: pulse-amber 2s infinite;
+}
+
+@keyframes pulse-amber {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
+    border-color: rgba(245, 158, 11, 0.8);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+    border-color: rgba(245, 158, 11, 0.8);
+  }
+}
+
+/* Custom Telemetry Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0E1524;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1E293B;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}

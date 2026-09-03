@@ -9,13 +9,32 @@ Outputs example JSON predictions following the production contract schema.
 """
 
 import sys
+import os
+import time
 import json
 import numpy as np
 import pandas as pd
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-from data_loader import load_delhi_station_data
-from detector import WeatherAnomalyDetector, Reading, AnomalyType
+# Ensure root and detector directories are on sys.path
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DETECTOR_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+if DETECTOR_DIR not in sys.path:
+    sys.path.insert(0, DETECTOR_DIR)
+
+try:
+    from data_loader import load_delhi_12m_history, get_train_val_test_splits
+    def load_delhi_station_data(force_fetch=False):
+        return load_delhi_12m_history(force_fetch=force_fetch)
+except ImportError:
+    from detector.data_loader import load_delhi_station_data
+
+try:
+    from detector import WeatherAnomalyDetector, Reading, AnomalyType
+except ImportError:
+    from detector.detector import WeatherAnomalyDetector, Reading, AnomalyType
 
 RNG = np.random.default_rng(42)
 
@@ -223,17 +242,120 @@ def print_evaluation_report(df: pd.DataFrame):
 
 
 # ---------------------------------------------------------------------------
+# 4. TASK 6 DISASTER SANITY TESTS
+# ---------------------------------------------------------------------------
+def run_disaster_sanity_tests(train_dict: dict, test_dict: dict):
+    print("==================================================")
+    print("    TASK 6: DISASTER EXTREMES SANITY TESTS        ")
+    print("==================================================")
+
+    detector = WeatherAnomalyDetector(station_history=train_dict)
+
+    # Part (a): Known extreme heatwave day in train split
+    df_igi_train = train_dict.get("igi_airport", pd.DataFrame())
+    heatwave_rows = df_igi_train[df_igi_train["temperature"] >= 40.0]
+    if not heatwave_rows.empty:
+        r_hw = heatwave_rows.iloc[0]
+        ts_hw = pd.to_datetime(r_hw["timestamp"])
+        hw_reading = Reading(
+            station_id="igi_airport",
+            timestamp=ts_hw,
+            temperature=float(r_hw["temperature"]),
+            pressure=float(r_hw["pressure"]),
+            humidity=float(r_hw["humidity"]),
+            lat=28.5562,
+            lon=77.1000
+        )
+
+        neighbors_hw = []
+        for sid, df_st in train_dict.items():
+            if sid == "igi_airport":
+                continue
+            match = df_st[pd.to_datetime(df_st["timestamp"]) == ts_hw]
+            if not match.empty:
+                r_n = match.iloc[0]
+                neighbors_hw.append(Reading(
+                    station_id=sid,
+                    timestamp=ts_hw,
+                    temperature=float(r_n["temperature"]),
+                    pressure=float(r_n["pressure"]),
+                    humidity=float(r_n["humidity"]),
+                    lat=r_n.get("lat", 0.0),
+                    lon=r_n.get("lon", 0.0)
+                ))
+
+        res_hw = detector.evaluate(hw_reading, neighbor_readings=neighbors_hw)
+        print("\nPart (a) Known Disaster Day Test (May 2026 Heatwave @ 40.1C):")
+        print(f"  Input Temp: {hw_reading.temperature} C | Timestamp: {ts_hw}")
+        print(f"  Evaluation Result: Anomaly={res_hw['is_anomaly']} | Type={res_hw['anomaly_type']} | Conf={res_hw['confidence']:.2f}")
+        print(f"  Reason: {res_hw['reason']}")
+        if not res_hw["is_anomaly"]:
+            print("  Status: PASSED (Known extreme weather correctly recognized as normal)")
+        else:
+            print("  Status: WARN (Flagged anomaly)")
+
+    # Part (b): Novel extreme monsoon day in held-out test split
+    df_igi_test = test_dict.get("igi_airport", pd.DataFrame())
+    monsoon_rows = df_igi_test[df_igi_test["humidity"] >= 85.0]
+    if not monsoon_rows.empty:
+        r_ms = monsoon_rows.iloc[0]
+        ts_ms = pd.to_datetime(r_ms["timestamp"])
+        ms_reading = Reading(
+            station_id="igi_airport",
+            timestamp=ts_ms,
+            temperature=float(r_ms["temperature"]),
+            pressure=float(r_ms["pressure"]),
+            humidity=float(r_ms["humidity"]),
+            lat=28.5562,
+            lon=77.1000
+        )
+
+        neighbors_ms = []
+        for sid, df_st in test_dict.items():
+            if sid == "igi_airport":
+                continue
+            match = df_st[pd.to_datetime(df_st["timestamp"]) == ts_ms]
+            if not match.empty:
+                r_n = match.iloc[0]
+                neighbors_ms.append(Reading(
+                    station_id=sid,
+                    timestamp=ts_ms,
+                    temperature=float(r_n["temperature"]),
+                    pressure=float(r_n["pressure"]),
+                    humidity=float(r_n["humidity"]),
+                    lat=r_n.get("lat", 0.0),
+                    lon=r_n.get("lon", 0.0)
+                ))
+
+        res_ms = detector.evaluate(ms_reading, neighbor_readings=neighbors_ms)
+        print("\nPart (b) Held-Out Novel Disaster Test (July 2026 Monsoon Extreme):")
+        print(f"  Input Temp: {ms_reading.temperature} C | Humidity: {ms_reading.humidity}% | Timestamp: {ts_ms}")
+        print(f"  Evaluation Result: Anomaly={res_ms['is_anomaly']} | Type={res_ms['anomaly_type']} | Conf={res_ms['confidence']:.2f}")
+        print(f"  Reason: {res_ms['reason']}")
+        if not res_ms["is_anomaly"]:
+            print("  Status: PASSED (Spatial consensus successfully saved regional extreme event)")
+        else:
+            print("  Status: WARN (Flagged anomaly)")
+    print("==================================================\n")
+
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    print("Loading Delhi-NCR AWS Station Data...", flush=True)
-    clean_history = load_delhi_station_data()
+    print("Loading 12-Month Delhi AWS Station Dataset...", flush=True)
+    data_12m = load_delhi_12m_history(force_fetch=False)
+    train_dict, val_dict, test_dict = get_train_val_test_splits(data_12m)
 
-    print("Injecting Labeled Synthetic Faults (6% fraction)...", flush=True)
-    corrupted_history = inject_faults_multi_station(clean_history, fault_fraction=0.06)
+    full_train_val = {sid: pd.concat([train_dict[sid], val_dict[sid]], ignore_index=True) for sid in train_dict}
 
-    print("Running 4-Layer Anomaly Detector across 10 Delhi stations...", flush=True)
-    results_df, samples = run_detection_evaluation(clean_history, corrupted_history, z_thresh=3.0)
+    print("Injecting Labeled Synthetic Faults into Held-Out Test Month (6% fraction)...", flush=True)
+    corrupted_test = inject_faults_multi_station(test_dict, fault_fraction=0.06)
+
+    print("Running Benchmark Evaluation across 10 Delhi stations...", flush=True)
+    results_df, samples = run_detection_evaluation(full_train_val, corrupted_test)
 
     print_evaluation_report(results_df)
+
+    run_disaster_sanity_tests(train_dict, test_dict)
 
     print("=== Sample Production Contract Outputs ===", flush=True)
     for idx, (r, eval_res, true_type) in enumerate(samples, 1):

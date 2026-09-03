@@ -25,8 +25,8 @@ STATIONS = {
     "pragati_maidan": {"name": "Pragati Maidan", "lat": 28.6180, "lon": 77.2460},
 }
 
-CSV_FILE = "delhi_weather_data.csv"
-PKL_FILE = "delhi_weather_data.pkl"
+CSV_FILE = "delhi_weather_12m.csv"
+PKL_FILE = "delhi_weather_12m.pkl"
 
 
 def fetch_station_data(station_id: str, lat: float, lon: float, start_date: str = "2026-07-20", end_date: str = "2026-08-25") -> pd.DataFrame:
@@ -100,6 +100,17 @@ def load_delhi_station_data(force_fetch: bool = False, start_date: str = "2026-0
         print(f"Successfully cached dataset ({len(full_df)} total records) to {CSV_FILE} and {PKL_FILE}.", flush=True)
 
     return station_history
+
+
+def load_delhi_12m_history(force_fetch: bool = False, start_date: str = "2025-08-01", end_date: str = "2026-08-31") -> dict:
+    """Alias for 12-month station data loading."""
+    try:
+        from data_loader import load_delhi_12m_history as root_load
+        if root_load != load_delhi_12m_history:
+            return root_load(force_fetch=force_fetch, start_date=start_date, end_date=end_date)
+    except Exception:
+        pass
+    return load_delhi_station_data(force_fetch=force_fetch, start_date=start_date, end_date=end_date)
 
 
 if __name__ == "__main__":
