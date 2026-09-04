@@ -48,8 +48,9 @@ COLS = {
 # ---------------------------------------------------------------------------
 # 1. FAULT INJECTION (Multi-station support)
 # ---------------------------------------------------------------------------
-def inject_faults_multi_station(station_history: dict, fault_fraction: float = 0.06) -> dict:
+def inject_faults_multi_station(station_history: dict, fault_fraction: float = 0.06, seed: int = 42) -> dict:
     """Returns a copy of station_history with labeled synthetic faults injected."""
+    rng = np.random.default_rng(seed)
     corrupted_history = {}
 
     for sid, df in station_history.items():
@@ -64,20 +65,20 @@ def inject_faults_multi_station(station_history: dict, fault_fraction: float = 0
         used_rows = set()
 
         for _ in range(n_faults):
-            ftype = RNG.choice(fault_types)
-            start = RNG.integers(10, n - 35)
+            ftype = rng.choice(fault_types)
+            start = rng.integers(10, n - 35)
             if start in used_rows:
                 continue
 
             if ftype == "spike":
-                spike_val = RNG.uniform(14.0, 22.0)
+                spike_val = rng.uniform(14.0, 22.0)
                 df_c.loc[start, COLS["temp"]] += spike_val
                 df_c.loc[start, "is_fault"] = True
                 df_c.loc[start, "fault_type"] = "spike"
                 used_rows.add(start)
 
             elif ftype == "frozen":
-                length = RNG.integers(8, 16)
+                length = rng.integers(8, 16)
                 frozen_t = df_c.loc[start, COLS["temp"]]
                 frozen_h = df_c.loc[start, COLS["rh"]]
                 frozen_p = df_c.loc[start, COLS["pres"]]
@@ -90,8 +91,8 @@ def inject_faults_multi_station(station_history: dict, fault_fraction: float = 0
                     used_rows.add(i)
 
             elif ftype == "drift":
-                length = RNG.integers(12, 24)
-                step = RNG.uniform(0.18, 0.35)
+                length = rng.integers(12, 24)
+                step = rng.uniform(0.18, 0.35)
                 for j, i in enumerate(range(start, min(start + length, n))):
                     df_c.loc[i, COLS["temp"]] += step * (j + 1)
                     df_c.loc[i, "is_fault"] = True
@@ -99,7 +100,7 @@ def inject_faults_multi_station(station_history: dict, fault_fraction: float = 0
                     used_rows.add(i)
 
             elif ftype == "dropout":
-                length = RNG.integers(2, 5)
+                length = rng.integers(2, 5)
                 for i in range(start, min(start + length, n)):
                     df_c.loc[i, [COLS["temp"], COLS["rh"], COLS["pres"]]] = np.nan
                     df_c.loc[i, "is_fault"] = True
