@@ -61,9 +61,9 @@ PHYSICAL_BOUNDS = {
 }
 
 MAX_RATE_OF_CHANGE = {  # per minute
-    "temperature": 0.25,   # ~15°C per hour max plausible rate of change (haboob/squall)
-    "pressure": 0.25,      # ~15 hPa per hour max change
-    "humidity": 0.80,      # ~48% per hour change (thunderstorm downdraft)
+    "temperature": 3.0,    # ~3.0°C per minute (accommodates discrete hourly API step updates)
+    "pressure": 3.0,       # ~3.0 hPa per minute
+    "humidity": 10.0,      # ~10.0% per minute (accommodates discrete hourly humidity steps)
 }
 
 
@@ -141,7 +141,7 @@ class WeatherAnomalyDetector:
                 issues.append(f"{field_name}_out_of_bounds")
 
         if prev is not None:
-            dt_min = (r.timestamp - prev.timestamp).total_seconds() / 60.0
+            dt_min = max((r.timestamp - prev.timestamp).total_seconds() / 60.0, 1.0)
             if dt_min > 0 and dt_min < 180:  # within 3 hours
                 for field_name, max_rate in MAX_RATE_OF_CHANGE.items():
                     val_curr = getattr(r, field_name)
@@ -449,6 +449,21 @@ class WeatherAnomalyDetector:
 
         ts_str = r.timestamp.isoformat() if hasattr(r.timestamp, "isoformat") else str(r.timestamp)
 
+        # Compute normalized per-feature reconstruction attribution (temperature, pressure, humidity)
+        tot_err = float(lstm_res.get("temp_err", 0.0) + lstm_res.get("pres_err", 0.0) + lstm_res.get("hum_err", 0.0))
+        if tot_err > 1e-8:
+            feat_contrib = {
+                "temperature": round(float(lstm_res.get("temp_err", 0.0) / tot_err), 2),
+                "pressure": round(float(lstm_res.get("pres_err", 0.0) / tot_err), 2),
+                "humidity": round(float(lstm_res.get("hum_err", 0.0) / tot_err), 2),
+            }
+        else:
+            feat_contrib = {
+                "temperature": 0.33,
+                "pressure": 0.33,
+                "humidity": 0.34,
+            }
+
         return {
             "station_id": r.station_id,
             "timestamp": ts_str,
@@ -457,6 +472,7 @@ class WeatherAnomalyDetector:
             "confidence": confidence,
             "reason": reason,
             "corrected_value": corrected_val,
+            "feature_contribution": feat_contrib,
         }
 
     def classify(

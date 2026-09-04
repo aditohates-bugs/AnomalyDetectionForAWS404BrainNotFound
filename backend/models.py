@@ -41,6 +41,7 @@ class AlertMessage(BaseModel):
     confidence: float
     reason: str
     corrected_value: Optional[Dict[str, float]] = None
+    feature_contribution: Optional[Dict[str, float]] = None
 
 
 class FaultInjectRequest(BaseModel):

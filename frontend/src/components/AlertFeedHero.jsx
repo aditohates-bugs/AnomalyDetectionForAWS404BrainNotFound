@@ -116,9 +116,19 @@ export default function AlertFeedHero({ alerts, onSelectStation }) {
                   <p>{alert.reason || 'Sensor deviation evaluated by detector.'}</p>
                 </div>
 
+                {/* Feature Contribution Attribution readout if available */}
+                {alert.feature_contribution && (
+                  <div className="mt-1 text-[10px] font-mono text-slate-400 flex items-center space-x-2 bg-slate-900/60 px-2.5 py-1 border border-slate-800/60 rounded-sm">
+                    <span className="text-teal-400/90 font-semibold uppercase">ATTRIBUTION:</span>
+                    <span>
+                      {Object.entries(alert.feature_contribution).map(([k, v]) => `${k}: ${Math.round(v * 100)}%`).join(' | ')}
+                    </span>
+                  </div>
+                )}
+
                 {/* Corrected Value Readout if available */}
                 {alert.corrected_value && (
-                  <div className="mt-2 text-[11px] font-mono text-teal-400/90 flex items-center space-x-2 bg-teal-950/30 px-2.5 py-1 border border-teal-800/50 rounded-sm">
+                  <div className="mt-1 text-[11px] font-mono text-teal-400/90 flex items-center space-x-2 bg-teal-950/30 px-2.5 py-1 border border-teal-800/50 rounded-sm">
                     <Cpu className="w-3.5 h-3.5 text-teal-400" />
                     <span>ESTIMATED CORRECTED VALUE:</span>
                     <span className="font-bold text-slate-100">
