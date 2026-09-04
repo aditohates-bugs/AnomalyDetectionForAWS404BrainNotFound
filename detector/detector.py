@@ -214,22 +214,46 @@ class WeatherAnomalyDetector:
             this_val = getattr(r, field_name)
             if this_val is None or (isinstance(this_val, (float, np.floating)) and np.isnan(this_val)):
                 continue
-            vals = np.array([getattr(n, field_name) for n in neighbor_readings if getattr(n, field_name) is not None and not np.isnan(getattr(n, field_name))])
+            vals = np.array([
+                getattr(n, field_name)
+                for n in neighbor_readings
+                if getattr(n, field_name) is not None and not np.isnan(getattr(n, field_name))
+            ])
             if len(vals) < 2:
                 continue
-            n_mean, n_std = vals.mean(), vals.std()
-            if n_std < (abs(n_mean) * 0.05 + 1.0) and abs(this_val - n_mean) > max(3.0 * n_std, 3.0):
+            
+            n_median = float(np.median(vals))
+            mad = float(np.median(np.abs(vals - n_median)))
+            robust_std = max(1.4826 * mad, 0.5)
+            
+            # Physical spatial threshold floor per variable (accounts for micro-climate & station elevation)
+            min_thresh = {"temperature": 4.0, "pressure": 6.0, "humidity": 15.0}.get(field_name, 4.0)
+            
+            if abs(this_val - n_median) > max(3.0 * robust_std, min_thresh):
                 issues.append(f"{field_name}_spatial_outlier")
         return issues
 
     def check_frozen(self, r: Reading, recent_window: list):
         issues = []
         if len(recent_window) >= 3:
-            t_vals = [w.temperature for w in recent_window[-3:] if w.temperature is not None and not np.isnan(w.temperature)]
+            valid_w = [w for w in recent_window if w.temperature is not None and not np.isnan(w.temperature)]
             if r.temperature is not None and not np.isnan(r.temperature):
-                t_vals.append(r.temperature)
-            if len(t_vals) >= 4 and (max(t_vals) - min(t_vals)) < 0.001:
-                issues.append("frozen_sensor_flatline")
+                valid_w.append(r)
+            if len(valid_w) >= 4:
+                last_4 = valid_w[-4:]
+                t_vals = [w.temperature for w in last_4]
+                
+                # Check time span of readings
+                ts_start = last_4[0].timestamp
+                ts_end = last_4[-1].timestamp
+                try:
+                    time_span_sec = abs((pd.to_datetime(ts_end) - pd.to_datetime(ts_start)).total_seconds())
+                except Exception:
+                    time_span_sec = 0.0
+
+                # Only flag flatline if values are identical AND time span >= 30 minutes (1800s)
+                if (max(t_vals) - min(t_vals)) < 0.001 and time_span_sec >= 1800:
+                    issues.append("frozen_sensor_flatline")
         return issues
 
     def _climatology_z(self, r: Reading) -> Optional[float]:
@@ -244,7 +268,6 @@ class WeatherAnomalyDetector:
     def _is_monotonic_increasing(self, vals: List[float], tol: float = 0.05) -> bool:
         if len(vals) < 4:
             return False
-        # Require actual monotonic growth (end value >= start value + 0.8) to distinguish drift from flatline/steady offset
         return (vals[-1] - vals[0] >= 0.8) and all(vals[i] >= vals[i - 1] - tol for i in range(1, len(vals)))
 
     def _expected_interval_min(self, recent_window: list) -> float:
@@ -257,7 +280,6 @@ class WeatherAnomalyDetector:
         if len(recent_window) >= 3:
             z_scores = [self._climatology_z(w) for w in recent_window[-3:]] + [self._climatology_z(r)]
             z_scores = [z for z in z_scores if z is not None]
-            # Require 4 consecutive timesteps with monotonic climatology deviation and |z| >= 1.0
             if len(z_scores) >= 4 and self._is_monotonic_increasing(z_scores, tol=0.01):
                 if abs(z_scores[-1]) >= 1.0:
                     issues.append("monotonic_climatology_drift")
@@ -265,9 +287,9 @@ class WeatherAnomalyDetector:
             if neighbor_readings and r.temperature is not None and not np.isnan(r.temperature):
                 n_temps = [n.temperature for n in neighbor_readings if n.temperature is not None and not np.isnan(n.temperature)]
                 if n_temps:
-                    n_mean = float(np.mean(n_temps))
-                    diff = r.temperature - n_mean
-                    if abs(diff) > 1.8:
+                    n_median = float(np.median(n_temps))
+                    diff = r.temperature - n_median
+                    if abs(diff) > 2.5:
                         issues.append("spatial_divergence_drift")
         return issues
 
@@ -350,7 +372,7 @@ class WeatherAnomalyDetector:
         lstm_res = self._compute_lstm_unusualness(r, recent_window)
         unusualness = lstm_res["unusualness"]
 
-        # Compute Neighbor Anomaly Score Spatial Consensus
+        # Compute Neighbor Anomaly Score Spatial Consensus using median to resist single outliers
         neighbor_unusualness_scores = []
         if self.use_lstm and neighbor_readings:
             for n_r in neighbor_readings:
@@ -358,7 +380,7 @@ class WeatherAnomalyDetector:
                 neighbor_unusualness_scores.append(n_res["unusualness"])
 
         avg_neighbor_unusualness = (
-            float(np.mean(neighbor_unusualness_scores)) if neighbor_unusualness_scores else 0.0
+            float(np.median(neighbor_unusualness_scores)) if neighbor_unusualness_scores else 0.0
         )
 
         all_issues = sanity_issues + clim_issues + cross_issues + spatial_issues + frozen_issues + drift_issues
@@ -467,14 +489,8 @@ class WeatherAnomalyDetector:
                 return AnomalyType.DROPOUT
 
         # 2. Hardware Stuck / Frozen Flatline
-        if frozen_issues or len(recent_window) >= 2:
-            recent_t = [x.temperature for x in recent_window[-2:] if x.temperature is not None and not np.isnan(x.temperature)]
-            if r.temperature is not None and not np.isnan(r.temperature):
-                recent_t.append(r.temperature)
-            if len(recent_t) >= 3 and max(recent_t) - min(recent_t) < 0.001:
-                return AnomalyType.STUCK
-            if frozen_issues:
-                return AnomalyType.STUCK
+        if frozen_issues:
+            return AnomalyType.STUCK
 
         # 3. Cross-Variable Thermodynamic Inconsistency (Dew Point / Heat-Saturation Impossible Combo)
         # Higher priority than spatial outlier!

@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
+    allowedHosts: true,
     proxy: {
       '/health': 'http://localhost:8000',
       '/stations': 'http://localhost:8000',

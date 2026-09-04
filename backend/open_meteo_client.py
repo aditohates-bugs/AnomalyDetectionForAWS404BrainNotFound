@@ -84,9 +84,9 @@ async def poll_all_stations_current(
                 fallback_r = Reading(
                     station_id=sid,
                     timestamp=pd.Timestamp.now(),
-                    temperature=28.0,
-                    pressure=1002.0,
-                    humidity=65.0,
+                    temperature=27.0,
+                    pressure=982.0,
+                    humidity=85.0,
                     lat=info["lat"],
                     lon=info["lon"]
                 )

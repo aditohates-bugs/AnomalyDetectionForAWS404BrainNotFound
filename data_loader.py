@@ -181,12 +181,126 @@ def audit_dataset(station_history: Dict[str, pd.DataFrame]) -> dict:
     return audit_results
 
 
-def get_train_val_test_splits(station_history: Dict[str, pd.DataFrame]) -> Tuple[dict, dict, dict]:
+def impute_missing_values(df: pd.DataFrame, method: str = "spline") -> pd.DataFrame:
+    """
+    Handle transmission dropouts with spline interpolation or forward-fill.
+    """
+    from scipy.interpolate import interp1d
+    
+    df = df.copy()
+    for col in ["temperature", "pressure", "humidity"]:
+        if col not in df.columns:
+            continue
+        
+        valid_mask = df[col].notna()
+        if valid_mask.sum() < 2:
+            df[col] = df[col].fillna(df[col].mean() if df[col].mean() > 0 else 20.0)
+            continue
+        
+        valid_indices = np.where(valid_mask)[0]
+        valid_values = df[col].values[valid_indices]
+        
+        if method == "spline":
+            try:
+                f = interp1d(valid_indices, valid_values, kind='cubic', fill_value='extrapolate', bounds_error=False)
+                df[col] = f(np.arange(len(df)))
+            except Exception:
+                df[col] = df[col].interpolate(method='linear', limit_direction='both')
+        elif method == "linear":
+            df[col] = df[col].interpolate(method='linear', limit_direction='both')
+        elif method == "ffill":
+            df[col] = df[col].ffill().bfill()
+    
+    return df
+
+
+def add_sensor_noise(df: pd.DataFrame, noise_std: float = 0.2, quantization: float = 0.1) -> pd.DataFrame:
+    """
+    Add stochastic sensor noise + quantization to simulate real hardware.
+    """
+    df = df.copy()
+    rng = np.random.default_rng(42)
+    
+    for col, sigma in [("temperature", noise_std), ("pressure", noise_std * 1.5), ("humidity", noise_std * 0.5)]:
+        if col not in df.columns:
+            continue
+        
+        noise = rng.normal(0, sigma, len(df))
+        df[col] = df[col] + noise
+        df[col] = np.round(df[col] / quantization) * quantization
+        
+        spike_mask = rng.random(len(df)) < 0.001
+        spike_magnitude = rng.uniform(-5, 5, len(df))
+        df.loc[spike_mask, col] = df.loc[spike_mask, col] + spike_magnitude[spike_mask]
+    
+    return df
+
+
+def compute_data_quality_report(station_history: dict) -> pd.DataFrame:
+    """Compute completeness, range, and anomaly metrics per station."""
+    quality_metrics = []
+    for sid, df in station_history.items():
+        metrics = {
+            "station_id": sid,
+            "total_records": len(df),
+            "date_range": f"{df['timestamp'].min().date()} to {df['timestamp'].max().date()}",
+            "temp_completeness_%": (df["temperature"].notna().sum() / len(df)) * 100,
+            "humidity_completeness_%": (df["humidity"].notna().sum() / len(df)) * 100,
+            "pressure_completeness_%": (df["pressure"].notna().sum() / len(df)) * 100,
+            "temp_range_C": f"[{df['temperature'].min():.1f}, {df['temperature'].max():.1f}]",
+            "humidity_range_%": f"[{df['humidity'].min():.1f}, {df['humidity'].max():.1f}]",
+            "pressure_range_hPa": f"[{df['pressure'].min():.1f}, {df['pressure'].max():.1f}]",
+        }
+        quality_metrics.append(metrics)
+    return pd.DataFrame(quality_metrics)
+
+
+def detect_extreme_windows(station_history: dict, temp_threshold: float = 40.0) -> dict:
+    """Identify extreme weather windows (heatwaves, cold snaps, monsoons)."""
+    extreme_windows = {}
+    for sid, df in station_history.items():
+        extreme_windows[sid] = {
+            "heatwave": int((df["temperature"] >= temp_threshold).sum()),
+            "cold_snap": int((df["temperature"] <= 7.0).sum()),
+            "high_humidity": int((df["humidity"] >= 85.0).sum()),
+            "low_humidity": int((df["humidity"] <= 10.0).sum()),
+            "extreme_pressure": int(((df["pressure"] < 950.0) | (df["pressure"] > 1030.0)).sum()),
+        }
+    return extreme_windows
+
+
+def compute_station_distances() -> np.ndarray:
+    """Compute pairwise distances (km) between all 10 stations."""
+    from math import radians, cos, sin, asin, sqrt
+    
+    def haversine(lat1, lon1, lat2, lon2):
+        lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        return 2 * asin(sqrt(a)) * 6371
+    
+    n = len(STATIONS)
+    dist_matrix = np.zeros((n, n))
+    sids = list(STATIONS.keys())
+    for i in range(n):
+        for j in range(i + 1, n):
+            s1, s2 = STATIONS[sids[i]], STATIONS[sids[j]]
+            d = haversine(s1["lat"], s1["lon"], s2["lat"], s2["lon"])
+            dist_matrix[i][j] = d
+            dist_matrix[j][i] = d
+    return dist_matrix
+
+
+def get_train_val_test_splits(
+    station_history: Dict[str, pd.DataFrame],
+    train_frac: float = 0.6,
+    val_frac: float = 0.2
+) -> Tuple[dict, dict, dict]:
     """
     Time-based split without data leakage:
-    - Train: Months 1 to 9 (e.g. Aug 2025 - Apr 2026)
-    - Val:   Months 10 to 11 (e.g. May 2026 - Jun 2026) -> used for K-sigma thresholding & tuning
-    - Test:  Month 12 (e.g. Jul 2026 - Aug 2026) -> held-out evaluation
+    - Train: First train_frac (default 60%)
+    - Val:   Next val_frac (default 20%)
+    - Test:  Remaining portion (default 20%)
     """
     train_dict, val_dict, test_dict = {}, {}, {}
 
@@ -194,8 +308,8 @@ def get_train_val_test_splits(station_history: Dict[str, pd.DataFrame]) -> Tuple
         df_sorted = df.sort_values("timestamp").reset_index(drop=True)
         n = len(df_sorted)
         
-        n_train = int(n * 0.75)  # 75% train (~9 months)
-        n_val = int(n * 0.90)    # 15% val (~2 months)
+        n_train = int(n * train_frac)
+        n_val = int(n * (train_frac + val_frac))
 
         train_dict[sid] = df_sorted.iloc[:n_train].reset_index(drop=True)
         val_dict[sid] = df_sorted.iloc[n_train:n_val].reset_index(drop=True)

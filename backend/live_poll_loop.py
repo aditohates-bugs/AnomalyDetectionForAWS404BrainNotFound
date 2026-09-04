@@ -46,17 +46,32 @@ async def run_live_poll_round():
     )
 
     # 2. Check and apply pending fault injections
+    eval_readings = {}
     for sid, r in readings.items():
+        # Append clean reading to disk log and state memory
+        append_to_live_log(r, is_fallback=getattr(r, "is_fallback", False))
+        app_state.update_reading(r)
+
         pending_fault = app_state.fault_injector.get_pending_fault(sid)
         if pending_fault:
             print(f" [LiveLoop] Applying queued '{pending_fault}' fault for station '{sid}'.", flush=True)
-            r = app_state.fault_injector.corrupt(r, pending_fault)
+            # Create a copy so corruption applies only to this evaluation tick
+            corrupted_r = Reading(
+                station_id=r.station_id,
+                timestamp=r.timestamp,
+                temperature=r.temperature,
+                pressure=r.pressure,
+                humidity=r.humidity,
+                lat=r.lat,
+                lon=r.lon
+            )
+            corrupted_r = app_state.fault_injector.corrupt(corrupted_r, pending_fault)
             app_state.fault_injector.clear_fault(sid)
-            readings[sid] = r
+            eval_readings[sid] = corrupted_r
+        else:
+            eval_readings[sid] = r
 
-        # Append to disk log
-        append_to_live_log(r, is_fallback=getattr(r, "is_fallback", False))
-        app_state.update_reading(r)
+    readings = eval_readings
 
     # 3. Evaluate each station through 4-layer detector
     eval_results = {}

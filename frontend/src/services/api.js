@@ -4,8 +4,10 @@
  * and streams real-time WebSocket alert evaluation payloads (/ws/alerts).
  */
 
-const API_BASE = 'http://localhost:8000';
-const WS_URL = 'ws://localhost:8000/ws/alerts';
+const API_BASE = '';
+const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3000';
+const WS_URL = `${protocol}//${host}/ws/alerts`;
 
 export async function fetchStations() {
   const resp = await fetch(`${API_BASE}/stations`);
